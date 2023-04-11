@@ -1,12 +1,12 @@
 //! Libsodium utility functions
-use ffi;
+
+use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 
 /// `memzero()` tries to effectively zero out the data in `x` even if
 /// optimizations are being applied to the code.
 pub fn memzero(x: &mut [u8]) {
-    unsafe {
-        ffi::sodium_memzero(x.as_mut_ptr() as *mut _, x.len());
-    }
+    x.zeroize()
 }
 
 /// `memcmp()` returns true if `x[0]`, `x[1]`, ..., `x[len-1]` are the
@@ -19,10 +19,7 @@ pub fn memzero(x: &mut [u8]) {
 /// that depends on the longest matching prefix of `x` and `y`, often allowing easy
 /// timing attacks.
 pub fn memcmp(x: &[u8], y: &[u8]) -> bool {
-    if x.len() != y.len() {
-        return false;
-    }
-    unsafe { ffi::sodium_memcmp(x.as_ptr() as *const _, y.as_ptr() as *const _, x.len()) == 0 }
+    x.ct_eq(y).into()
 }
 
 /// `mlock()` locks memory given region which can help avoiding swapping the
@@ -31,12 +28,8 @@ pub fn memcmp(x: &[u8], y: &[u8]) -> bool {
 /// Operating system might limit the amount of memory a process can `mlock()`.
 /// This function can fail if `mlock()` fails to lock the memory.
 pub fn mlock(x: &mut [u8]) -> Result<(), ()> {
-    let ret = unsafe { ffi::sodium_mlock(x.as_mut_ptr() as *mut _, x.len()) };
-    if ret == 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
+    // https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtuallock on windows
+    unsafe { nix::sys::mman::mlock(x as *const [u8] as *const _, x.len()).map_err(|_| ()) }
 }
 
 /// `munlock()` unlocks memory region.
@@ -44,16 +37,8 @@ pub fn mlock(x: &mut [u8]) -> Result<(), ()> {
 /// `munlock()` overwrites the region with zeros before unlocking it, so it
 /// doesn't have to be done before calling this function.
 pub fn munlock(x: &mut [u8]) -> Result<(), ()> {
-    let ret = unsafe {
-        // sodium_munlock() internally calls sodium_memzero() to clear memory
-        // region.
-        ffi::sodium_munlock(x.as_mut_ptr() as *mut _, x.len())
-    };
-    if ret == 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
+    x.fill(0);
+    unsafe { nix::sys::mman::munlock(x as *const [u8] as *const _, x.len()).map_err(|_| ()) }
 }
 
 /// `increment_le()` treats `x` as an unsigned little-endian number and increments it in
@@ -65,8 +50,12 @@ pub fn munlock(x: &mut [u8]) -> Result<(), ()> {
 /// If the caller does not do that the cryptographic primitives in sodiumoxide
 /// will not uphold any security guarantees (i.e. they may break)
 pub fn increment_le(x: &mut [u8]) {
-    unsafe {
-        ffi::sodium_increment(x.as_mut_ptr(), x.len());
+    for c in x {
+        let (d, carry) = c.overflowing_add(1);
+        *c = d;
+        if !carry {
+            return;
+        }
     }
 }
 
@@ -81,8 +70,12 @@ pub fn increment_le(x: &mut [u8]) {
 /// will not uphold any security guarantees (i.e. they may break)
 pub fn add_le(x: &mut [u8], y: &[u8]) -> Result<(), ()> {
     if x.len() == y.len() {
-        unsafe {
-            ffi::sodium_add(x.as_mut_ptr(), y.as_ptr(), x.len());
+        let mut carry = 0;
+        for (x, y) in std::iter::zip(x, y) {
+            let (z, c1) = x.overflowing_add(*y);
+            let (w, c2) = z.overflowing_add(carry);
+            *x = w;
+            carry = (c1 | c2) as u8;
         }
         Ok(())
     } else {
@@ -92,14 +85,17 @@ pub fn add_le(x: &mut [u8], y: &[u8]) -> Result<(), ()> {
 
 #[cfg(test)]
 mod test {
+    use rand::{thread_rng, RngCore};
+
     use super::*;
 
     #[test]
     fn test_memcmp() {
-        use randombytes::randombytes;
+        // use randombytes::randombytes;
 
         for i in 0..256 {
-            let x = randombytes(i);
+            let mut x = vec![0; i];
+            thread_rng().fill_bytes(&mut x);
             assert!(memcmp(&x, &x));
             let mut y = x.clone();
             assert!(memcmp(&x, &y));
@@ -107,7 +103,8 @@ mod test {
             assert!(!memcmp(&x, &y));
             assert!(!memcmp(&y, &x));
 
-            y = randombytes(i);
+            let mut y = vec![0; i];
+            thread_rng().fill_bytes(&mut y);
             if x == y {
                 assert!(memcmp(&x, &y))
             } else {
@@ -245,32 +242,5 @@ mod test {
         assert_eq!(&x, t);
         assert!(munlock(&mut x).is_ok());
         assert_ne!(&x, t);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_mlock_fail() {
-        // This value should be bigger than platform's page size so that we can
-        // lock at least page size of memory. And this limit is going to be the
-        // RLIMIT_MEMLOCK (see setrlimit(2)) for the rest of the process
-        // duration.
-        const LOCK_LIMIT: libc::rlim_t = 16384;
-
-        let mut limit = libc::rlimit {
-            rlim_cur: 0,
-            rlim_max: 0,
-        };
-        let ret = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut limit) };
-        assert_eq!(ret, 0, "libc::getrlimit failed");
-
-        if limit.rlim_cur > LOCK_LIMIT {
-            limit.rlim_cur = LOCK_LIMIT;
-        }
-
-        let ret = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &limit) };
-        assert_eq!(ret, 0, "libc::setrlimit failed");
-
-        let mut x = vec![0; 5 * LOCK_LIMIT as usize];
-        assert!(mlock(&mut x).is_err());
     }
 }

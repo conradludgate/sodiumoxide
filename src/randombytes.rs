@@ -1,13 +1,14 @@
 //! Cryptographic random number generation.
 
-use ffi;
 #[cfg(not(feature = "std"))]
 use prelude::*;
+use rand::{distributions::Uniform, prelude::Distribution, thread_rng, RngCore, SeedableRng, Rng};
+use rand_chacha::ChaCha20Rng;
 
 /// The number of seed bytes to use for the deterministic RNG functions
 /// [`randombytes_buf_deterministic()`] and
 /// [`randombytes_buf_deterministic_into()`]
-pub const SEEDBYTES: usize = ffi::randombytes_SEEDBYTES as usize;
+pub const SEEDBYTES: usize = 0x20;
 
 /// `randombytes()` randomly generates size bytes of data.
 ///
@@ -15,11 +16,9 @@ pub const SEEDBYTES: usize = ffi::randombytes_SEEDBYTES as usize;
 /// called `sodiumoxide::init()` once before using any other function
 /// from sodiumoxide.
 pub fn randombytes(size: usize) -> Vec<u8> {
-    unsafe {
-        let mut buf = vec![0u8; size];
-        ffi::randombytes_buf(buf.as_mut_ptr() as *mut _, size);
-        buf
-    }
+    let mut buf = vec![0u8; size];
+    thread_rng().fill_bytes(&mut buf);
+    buf
 }
 
 /// `randombytes_into()` fills a buffer `buf` with random data.
@@ -28,9 +27,7 @@ pub fn randombytes(size: usize) -> Vec<u8> {
 /// called `sodiumoxide::init()` once before using any other function
 /// from sodiumoxide.
 pub fn randombytes_into(buf: &mut [u8]) {
-    unsafe {
-        ffi::randombytes_buf(buf.as_mut_ptr() as *mut _, buf.len());
-    }
+    thread_rng().fill_bytes(buf)
 }
 
 /// `randombytes_uniform()` returns an unpredictable value between 0 and
@@ -43,7 +40,8 @@ pub fn randombytes_into(buf: &mut [u8]) {
 /// called `sodiumoxide::init()` once before using any other function
 /// from sodiumoxide.
 pub fn randombytes_uniform(upper_bound: u32) -> u32 {
-    unsafe { ffi::randombytes_uniform(upper_bound) }
+    if upper_bound == 0 { return 0; }
+    Uniform::from(0..upper_bound).sample(&mut thread_rng())
 }
 
 new_type! {
@@ -69,11 +67,9 @@ new_type! {
 /// This function is mainly useful for writing tests, and was introduced in libsodium 1.0.12. Under
 /// the hood, it uses the ChaCha20 stream cipher. Up to 256 GB can be produced with a single seed.
 pub fn randombytes_buf_deterministic(size: usize, seed: &Seed) -> Vec<u8> {
-    unsafe {
-        let mut buf = vec![0u8; size];
-        ffi::randombytes_buf_deterministic(buf.as_mut_ptr() as *mut _, size, seed.0.as_ptr());
-        buf
-    }
+    let mut buf = vec![0u8; size];
+    ChaCha20Rng::from_seed(seed.0).fill(buf.as_mut_slice());
+    buf
 }
 
 /// WARNING: using this function in a cryptographic setting is dangerous. Read the full
@@ -82,9 +78,7 @@ pub fn randombytes_buf_deterministic(size: usize, seed: &Seed) -> Vec<u8> {
 /// A counterpart to [`randombytes_buf_deterministic()`] that
 /// fills `buf` with `buf.len()` bytes instead of returning a value.
 pub fn randombytes_buf_deterministic_into(buf: &mut [u8], seed: &Seed) {
-    unsafe {
-        ffi::randombytes_buf_deterministic(buf.as_mut_ptr() as *mut _, buf.len(), seed.0.as_ptr());
-    }
+    ChaCha20Rng::from_seed(seed.0).fill(buf);
 }
 
 #[cfg(test)]
@@ -93,29 +87,21 @@ mod test {
 
     #[test]
     fn test_randombytes_uniform_0() {
-        ::init().unwrap();
-
         assert_eq!(randombytes_uniform(0), 0);
     }
 
     #[test]
     fn test_randombytes_uniform_1() {
-        ::init().unwrap();
-
         assert_eq!(randombytes_uniform(1), 0);
     }
 
     #[test]
     fn test_randombytes_uniform_7() {
-        ::init().unwrap();
-
         assert!(randombytes_uniform(7) < 7);
     }
 
     #[test]
     fn test_randombytes_buf_deterministic() {
-        ::init().unwrap();
-
         let seed = Seed([0u8; SEEDBYTES]);
         let res_1 = randombytes_buf_deterministic(10, &seed);
         let res_2 = randombytes_buf_deterministic(10, &seed);
@@ -124,8 +110,6 @@ mod test {
 
     #[test]
     fn test_randombytes_buf_deterministic_into() {
-        ::init().unwrap();
-
         let seed = Seed([0u8; SEEDBYTES]);
         let mut buf_1 = vec![0u8; 10];
         let mut buf_2 = vec![0u8; 10];
@@ -136,8 +120,6 @@ mod test {
 
     #[test]
     fn test_randombytes_buf_deterministic_unique_given_seed() {
-        ::init().unwrap();
-
         let seed_1 = Seed([
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
             24, 25, 26, 27, 28, 29, 30, 31,

@@ -1,27 +1,32 @@
 [package]
-authors = ["dnaq"]
-description = "Fast cryptographic library for Rust (bindings to libsodium)"
+description = "Fast cryptographic library for Rust. Drop in replacement for sodiumoxide with less chlorides and more oxides"
 documentation = "https://docs.rs/sodiumoxide"
-keywords = ["crypto", "NaCl", "libsodium"]
+keywords = ["crypto", "NaCl", "libsodium", "RustCrypto"]
 license = "MIT OR Apache-2.0"
-name = "sodiumoxide"
-readme = "README.md"
-repository = "https://github.com/sodiumoxide/sodiumoxide"
+name = "sodiumoxide2"
+repository = "https://github.com/conradludgate/sodiumoxide"
 categories = ["cryptography"]
 version = "0.2.7"
 exclude = [
     "**/.gitignore",
     ".github/*"
 ]
+edition = "2021"
 
-[workspace]
-members = ["libsodium-sys", "testcrate"]
+# [workspace]
+# members = ["libsodium-sys", "testcrate"]
 
 [dependencies]
-ed25519 = { version = "1", default-features = false }
-libc = { version = "^0.2.41" , default-features = false }
-libsodium-sys = { version = "0.2.7", path = "libsodium-sys" }
+# ed25519 = { version = "1", default-features = false }
 serde = { version = "^1.0.59", default-features = false, optional = true }
+subtle = "2"
+zeroize = "1.6.0"
+rand = "0.8"
+rand_chacha = "0.3.1"
+hex = "0.4.3"
+base64 = "0.21.0"
+nix = "0.26.2"
+chacha20poly1305 = "0.10.1"
 
 [dev-dependencies]
 serde = "^1.0.59"
@@ -32,4 +37,4 @@ rmp-serde = "^0.13.7"
 benchmarks = []
 std = []
 default = ["serde", "std"]
-use-pkg-config = ["libsodium-sys/use-pkg-config"]
+use-pkg-config = []

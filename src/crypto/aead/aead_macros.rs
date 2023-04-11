@@ -8,9 +8,8 @@ macro_rules! aead_module (($seal_name:ident,
                            $test_gate:expr) => (
 
 #[cfg(not(feature = "std"))] use prelude::*;
-use libc::c_ulonglong;
 use std::ptr;
-use randombytes::randombytes_into;
+use crate::randombytes::randombytes_into;
 
 /// Number of bytes in a `Key`.
 pub const KEYBYTES: usize = $keybytes;

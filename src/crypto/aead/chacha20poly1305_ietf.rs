@@ -2,22 +2,238 @@
 //! practically unlimited number of messages, but individual messages cannot
 //! exceed 64*(2^32)-64 bytes (approximatively 256 GB).
 
-use ffi::{
-    crypto_aead_chacha20poly1305_ietf_ABYTES, crypto_aead_chacha20poly1305_ietf_KEYBYTES,
-    crypto_aead_chacha20poly1305_ietf_NPUBBYTES, crypto_aead_chacha20poly1305_ietf_decrypt,
-    crypto_aead_chacha20poly1305_ietf_decrypt_detached, crypto_aead_chacha20poly1305_ietf_encrypt,
-    crypto_aead_chacha20poly1305_ietf_encrypt_detached,
+use chacha20poly1305::{
+    aead::{Aead, AeadInPlace, KeyInit, Payload},
+    ChaCha20Poly1305,
 };
-aead_module!(
-    crypto_aead_chacha20poly1305_ietf_encrypt,
-    crypto_aead_chacha20poly1305_ietf_decrypt,
-    crypto_aead_chacha20poly1305_ietf_encrypt_detached,
-    crypto_aead_chacha20poly1305_ietf_decrypt_detached,
-    crypto_aead_chacha20poly1305_ietf_KEYBYTES as usize,
-    crypto_aead_chacha20poly1305_ietf_NPUBBYTES as usize,
-    crypto_aead_chacha20poly1305_ietf_ABYTES as usize,
-    true
-);
+
+use crate::randombytes::randombytes_into;
+
+/// Number of bytes in a `Key`.
+pub const KEYBYTES: usize = 32;
+
+/// Number of bytes in a `Nonce`.
+pub const NONCEBYTES: usize = 12;
+
+/// Number of bytes in an authentication `Tag`.
+pub const TAGBYTES: usize = 16;
+
+new_type! {
+    /// `Key` for symmetric authenticated encryption with additional data.
+    ///
+    /// When a `Key` goes out of scope its contents will
+    /// be zeroed out
+    secret Key(KEYBYTES);
+}
+
+new_type! {
+    /// `Nonce` for symmetric authenticated encryption with additional data.
+    nonce Nonce(NONCEBYTES);
+}
+
+new_type! {
+    /// Authentication `Tag` for symmetric authenticated encryption with additional data in
+    /// detached mode.
+    public Tag(TAGBYTES);
+}
+
+/// `gen_key()` randomly generates a secret key
+///
+/// THREAD SAFETY: `gen_key()` is thread-safe provided that you have
+/// called `sodiumoxide::init()` once before using any other function
+/// from sodiumoxide.
+pub fn gen_key() -> Key {
+    let mut k = Key([0u8; KEYBYTES]);
+    randombytes_into(&mut k.0);
+    k
+}
+
+/// `seal()` encrypts and authenticates a message `m` together with optional plaintext data `ad`
+/// using a secret key `k` and a nonce `n`. It returns a ciphertext `c`.
+pub fn seal(m: &[u8], ad: Option<&[u8]>, n: &Nonce, k: &Key) -> Vec<u8> {
+    let cipher = ChaCha20Poly1305::new_from_slice(&k.0).unwrap();
+
+    cipher
+        .encrypt(
+            chacha20poly1305::Nonce::from_slice(&n.0),
+            Payload {
+                msg: m,
+                aad: ad.unwrap_or_default(),
+            },
+        )
+        .unwrap()
+}
+
+/// `seal_detached()` encrypts and authenticates a message `m` together with optional plaintext data
+/// `ad` using a secret key `k` and a nonce `n`.
+/// `m` is encrypted in place, so after this function returns it will contain the ciphertext.
+/// The detached authentication tag is returned by value.
+pub fn seal_detached(m: &mut [u8], ad: Option<&[u8]>, n: &Nonce, k: &Key) -> Tag {
+    let cipher = ChaCha20Poly1305::new_from_slice(&k.0).unwrap();
+
+    Tag(cipher
+        .encrypt_in_place_detached(
+            chacha20poly1305::Nonce::from_slice(&n.0),
+            ad.unwrap_or_default(),
+            m,
+        )
+        .unwrap()
+        .as_slice()
+        .try_into()
+        .unwrap())
+}
+
+/// `open()` verifies and decrypts a ciphertext `c` together with optional plaintext data `ad`
+/// using a secret key `k` and a nonce `n`.
+/// It returns a plaintext `Ok(m)`.
+/// If the ciphertext fails verification, `open()` returns `Err(())`.
+pub fn open(c: &[u8], ad: Option<&[u8]>, n: &Nonce, k: &Key) -> Result<Vec<u8>, ()> {
+    let cipher = ChaCha20Poly1305::new_from_slice(&k.0).unwrap();
+
+    cipher
+        .decrypt(
+            chacha20poly1305::Nonce::from_slice(&n.0),
+            Payload {
+                msg: c,
+                aad: ad.unwrap_or_default(),
+            },
+        )
+        .map_err(|_| ())
+}
+/// `open_detached()` verifies and decrypts a ciphertext `c` toghether with optional plaintext data
+/// `ad` and and authentication tag `tag`, using a secret key `k` and a nonce `n`.
+/// `c` is decrypted in place, so if this function is successful it will contain the plaintext.
+/// If the ciphertext fails verification, `open_detached()` returns `Err(())`,
+/// and the ciphertext is not modified.
+pub fn open_detached(
+    c: &mut [u8],
+    ad: Option<&[u8]>,
+    t: &Tag,
+    n: &Nonce,
+    k: &Key,
+) -> Result<(), ()> {
+    let cipher = ChaCha20Poly1305::new_from_slice(&k.0).unwrap();
+
+    cipher
+        .decrypt_in_place_detached(
+            chacha20poly1305::Nonce::from_slice(&n.0),
+            ad.unwrap_or_default(),
+            c,
+            chacha20poly1305::Tag::from_slice(&t.0),
+        )
+        .map_err(|_| ())
+}
+
+#[cfg(test)]
+mod test_m {
+    use super::*;
+    use crate::crypto::nonce::gen_random_nonce;
+
+    #[test]
+    fn test_seal_open() {
+        use crate::randombytes::randombytes;
+        for i in 0..256usize {
+            let k = gen_key();
+            let n = gen_random_nonce();
+            let ad = randombytes(i);
+            let m = randombytes(i);
+            let c = seal(&m, Some(&ad), &n, &k);
+            let m2 = open(&c, Some(&ad), &n, &k).unwrap();
+            assert_eq!(m, m2);
+        }
+    }
+
+    #[test]
+    fn test_seal_open_tamper() {
+        use crate::randombytes::randombytes;
+        for i in 0..32usize {
+            let k = gen_key();
+            let n = gen_random_nonce();
+            let mut ad = randombytes(i);
+            let m = randombytes(i);
+            let mut c = seal(&m, Some(&ad), &n, &k);
+            for j in 0..c.len() {
+                c[j] ^= 0x20;
+                let m2 = open(&c, Some(&ad), &n, &k);
+                c[j] ^= 0x20;
+                assert!(m2.is_err());
+            }
+            for j in 0..ad.len() {
+                ad[j] ^= 0x20;
+                let m2 = open(&c, Some(&ad), &n, &k);
+                ad[j] ^= 0x20;
+                assert!(m2.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn test_seal_open_detached() {
+        use crate::randombytes::randombytes;
+        for i in 0..256usize {
+            let k = gen_key();
+            let n = gen_random_nonce();
+            let ad = randombytes(i);
+            let mut m = randombytes(i);
+            let m2 = m.clone();
+            let t = seal_detached(&mut m, Some(&ad), &n, &k);
+            open_detached(&mut m, Some(&ad), &t, &n, &k).unwrap();
+            assert_eq!(m, m2);
+        }
+    }
+
+    #[test]
+    fn test_seal_open_detached_tamper() {
+        use crate::randombytes::randombytes;
+        for i in 0..32usize {
+            let k = gen_key();
+            let n = gen_random_nonce();
+            let mut ad = randombytes(i);
+            let mut m = randombytes(i);
+            let mut t = seal_detached(&mut m, Some(&ad), &n, &k);
+            for j in 0..m.len() {
+                m[j] ^= 0x20;
+                let r = open_detached(&mut m, Some(&ad), &t, &n, &k);
+                m[j] ^= 0x20;
+                assert!(r.is_err());
+            }
+            for j in 0..ad.len() {
+                ad[j] ^= 0x20;
+                let r = open_detached(&mut m, Some(&ad), &t, &n, &k);
+                ad[j] ^= 0x20;
+                assert!(r.is_err());
+            }
+            for j in 0..t.0.len() {
+                t.0[j] ^= 0x20;
+                let r = open_detached(&mut m, Some(&ad), &t, &n, &k);
+                t.0[j] ^= 0x20;
+                assert!(r.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn test_seal_open_detached_same() {
+        use crate::randombytes::randombytes;
+        for i in 0..256usize {
+            let k = gen_key();
+            let n = gen_random_nonce();
+            let ad = randombytes(i);
+            let mut m = randombytes(i);
+
+            let c = seal(&m, Some(&ad), &n, &k);
+            let t = seal_detached(&mut m, Some(&ad), &n, &k);
+
+            assert_eq!(&c[0..c.len() - TAGBYTES], &m[..]);
+            assert_eq!(&c[c.len() - TAGBYTES..], &t.0[..]);
+
+            let m2 = open(&c, Some(&ad), &n, &k).unwrap();
+            open_detached(&mut m, Some(&ad), &t, &n, &k).unwrap();
+
+            assert_eq!(m2, m);
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {

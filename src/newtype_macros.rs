@@ -26,7 +26,7 @@ macro_rules! newtype_from_slice (($newtype:ident, $len:expr) => (
 macro_rules! newtype_traits (($newtype:ident, $len:expr) => (
     impl ::std::cmp::PartialEq for $newtype {
         fn eq(&self, other: &$newtype) -> bool {
-            use utils::memcmp;
+            use crate::utils::memcmp;
             memcmp(&self.0, &other.0)
         }
     }
@@ -211,7 +211,7 @@ macro_rules! new_type {
         }
         impl Drop for $name {
             fn drop(&mut self) {
-                use utils::memzero;
+                use crate::utils::memzero;
                 memzero(&mut self.0);
             }
         }
@@ -277,7 +277,7 @@ macro_rules! new_type {
             /// If the caller does not do that the cryptographic primitives in sodiumoxide
             /// will not uphold any security guarantees.
             pub fn increment_le_inplace(&mut self) {
-                use utils::increment_le;
+                use crate::utils::increment_le;
                 increment_le(&mut self.0);
             }
 

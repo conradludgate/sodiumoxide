@@ -52,8 +52,6 @@
 //!
 //!  [`crypto::shorthash`](crypto/shorthash/index.html)
 
-#![crate_name = "sodiumoxide"]
-#![crate_type = "lib"]
 #![warn(missing_docs)]
 #![warn(non_upper_case_globals)]
 #![warn(non_camel_case_types)]
@@ -63,17 +61,9 @@
 // Remove this after https://github.com/sodiumoxide/sodiumoxide/issues/221 is done
 #![allow(clippy::result_unit_err)]
 
-extern crate libsodium_sys as ffi;
-
-extern crate ed25519;
-extern crate libc;
-#[cfg(any(test, feature = "serde"))]
-extern crate serde;
 #[cfg(not(feature = "std"))]
 #[macro_use]
 extern crate alloc;
-#[cfg(all(test, not(feature = "std")))]
-extern crate std;
 
 #[cfg(all(not(test), not(feature = "std")))]
 mod std {
@@ -94,11 +84,7 @@ mod prelude {
 ///
 /// `init()` returns `Ok` if initialization succeeded and `Err` if it failed.
 pub fn init() -> Result<(), ()> {
-    if unsafe { ffi::sodium_init() } >= 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
+    Ok(())
 }
 
 #[macro_use]
@@ -116,21 +102,21 @@ mod test_utils;
 /// Cryptographic functions
 pub mod crypto {
     pub mod aead;
-    pub mod auth;
-    pub mod box_;
-    pub mod generichash;
-    pub mod hash;
-    pub mod kdf;
-    pub mod kx;
+    // pub mod auth;
+    // pub mod box_;
+    // pub mod generichash;
+    // pub mod hash;
+    // pub mod kdf;
+    // pub mod kx;
     mod nonce;
-    pub mod onetimeauth;
-    pub mod pwhash;
-    pub mod scalarmult;
-    pub mod sealedbox;
-    pub mod secretbox;
-    pub mod secretstream;
-    pub mod shorthash;
-    pub mod sign;
-    pub mod stream;
-    pub mod verify;
+    // pub mod onetimeauth;
+    // pub mod pwhash;
+    // pub mod scalarmult;
+    // pub mod sealedbox;
+    // pub mod secretbox;
+    // pub mod secretstream;
+    // pub mod shorthash;
+    // pub mod sign;
+    // pub mod stream;
+    // pub mod verify;
 }

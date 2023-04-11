@@ -1,4 +1,4 @@
-use randombytes::randombytes_into;
+use crate::randombytes::randombytes_into;
 
 /// The `Nonce` trait allows for generic construction
 /// from an array of bytes, e.g. to generically create random nonces.
