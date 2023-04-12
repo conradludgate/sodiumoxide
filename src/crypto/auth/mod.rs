@@ -34,7 +34,7 @@
 //!
 //! # Example (simple interface)
 //! ```
-//! use sodiumoxide::crypto::auth;
+//! use sodiumoxide2::crypto::auth;
 //!
 //! let key = auth::gen_key();
 //! let data_to_authenticate = b"some data";
@@ -44,8 +44,8 @@
 //!
 //! # Example (streaming interface)
 //! ```
-//! use sodiumoxide::crypto::auth;
-//! use sodiumoxide::randombytes;
+//! use sodiumoxide2::crypto::auth;
+//! use sodiumoxide2::randombytes;
 //!
 //! let key = randombytes::randombytes(123);
 //!
@@ -66,10 +66,6 @@
 //! ```
 
 pub use self::hmacsha512256::*;
-#[macro_use]
-mod auth_macros;
-#[macro_use]
-mod auth_state_macros;
 pub mod hmacsha256;
 pub mod hmacsha512;
 pub mod hmacsha512256;

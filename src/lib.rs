@@ -102,7 +102,7 @@ mod test_utils;
 /// Cryptographic functions
 pub mod crypto {
     pub mod aead;
-    // pub mod auth;
+    pub mod auth;
     pub mod box_;
     // pub mod generichash;
     // pub mod hash;

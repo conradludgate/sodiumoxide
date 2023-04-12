@@ -36,6 +36,7 @@ x25519-dalek = { version = "1", default-features = false }
 typenum = "1.16.0"
 generic-array = "0.14.7"
 blake2 = "0.10.6"
+hmac = "0.12.1"
 
 [dev-dependencies]
 serde = "^1.0.59"
