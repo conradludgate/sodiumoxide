@@ -12,7 +12,7 @@
 //!
 //! # Example (combined mode)
 //! ```
-//! use sodiumoxide::crypto::aead;
+//! use sodiumoxide2::crypto::aead;
 //!
 //! let k = aead::gen_key();
 //! let n = aead::gen_nonce();
@@ -27,7 +27,7 @@
 //!
 //! # Example (detached mode)
 //! ```
-//! use sodiumoxide::crypto::aead;
+//! use sodiumoxide2::crypto::aead;
 //!
 //! let k = aead::gen_key();
 //! let n = aead::gen_nonce();

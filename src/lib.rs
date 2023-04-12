@@ -103,7 +103,7 @@ mod test_utils;
 pub mod crypto {
     pub mod aead;
     // pub mod auth;
-    // pub mod box_;
+    pub mod box_;
     // pub mod generichash;
     // pub mod hash;
     // pub mod kdf;

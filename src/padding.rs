@@ -23,7 +23,7 @@
 /// The function returns `Err(())` if the padded buffer length would exceed `max_buflen`, or if the
 /// block size is 0. It returns a result containing the new padded length upon success.
 pub fn pad(buf: &mut [u8], unpadded_buflen: usize, blocksize: usize) -> Result<usize, ()> {
-    if blocksize == 0{
+    if blocksize == 0 {
         return Err(());
     }
     let extra = blocksize - unpadded_buflen % blocksize;
@@ -47,7 +47,7 @@ pub fn unpad(buf: &[u8], padded_buflen: usize, blocksize: usize) -> Result<usize
     if padded_buflen == 0 {
         return Err(());
     }
-    let last_block = &buf[padded_buflen-blocksize..padded_buflen];
+    let last_block = &buf[padded_buflen - blocksize..padded_buflen];
     let padding = last_block.iter().rev().position(|x| *x == 128).ok_or(())? + 1;
     Ok(padded_buflen - padding)
 }

@@ -20,15 +20,21 @@ edition = "2021"
 # ed25519 = { version = "1", default-features = false }
 serde = { version = "^1.0.59", default-features = false, optional = true }
 subtle = "2"
-zeroize = "1.6.0"
+zeroize = "1"
 rand = "0.8"
-rand_chacha = "0.3.1"
 hex = "0.4.3"
 base64 = "0.21.0"
 nix = "0.26.2"
 chacha20poly1305 = "0.10.1"
 aes-gcm = "0.10.1"
 xsalsa20poly1305 = "0.9.0"
+crypto_box = "0.8.2"
+sha2 = "0.10.6"
+chacha20 = "0.9.1"
+salsa20 = "0.10.2"
+x25519-dalek = { version = "1", default-features = false }
+typenum = "1.16.0"
+generic-array = "0.14.7"
 
 [dev-dependencies]
 serde = "^1.0.59"

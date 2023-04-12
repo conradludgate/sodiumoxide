@@ -5,33 +5,38 @@
 //! This function is conjectured to meet the standard notions of privacy and
 //! third-party unforgeability.
 
-use crypto::nonce::gen_random_nonce;
-use ffi;
+use crate::crypto::nonce::gen_random_nonce;
+use aes_gcm::{aead::Aead, AeadInPlace, KeyInit};
+use crypto_box::SalsaBox;
+use generic_array::GenericArray;
 #[cfg(not(feature = "std"))]
 use prelude::*;
+use rand::thread_rng;
+use salsa20::hsalsa;
+use sha2::{Digest, Sha512};
+use x25519_dalek::x25519;
+use xsalsa20poly1305::XSalsa20Poly1305;
+use zeroize::Zeroizing;
 
 /// Number of bytes in a `Seed`.
-pub const SEEDBYTES: usize = ffi::crypto_box_curve25519xsalsa20poly1305_SEEDBYTES as usize;
+pub const SEEDBYTES: usize = 32;
 
 /// Number of bytes in a `PublicKey`.
-pub const PUBLICKEYBYTES: usize =
-    ffi::crypto_box_curve25519xsalsa20poly1305_PUBLICKEYBYTES as usize;
+pub const PUBLICKEYBYTES: usize = crypto_box::KEY_SIZE;
 
 /// Number of bytes in a `SecretKey`.
-pub const SECRETKEYBYTES: usize =
-    ffi::crypto_box_curve25519xsalsa20poly1305_SECRETKEYBYTES as usize;
+pub const SECRETKEYBYTES: usize = crypto_box::KEY_SIZE;
 
 /// Number of bytes in a `Nonce`.
-pub const NONCEBYTES: usize = ffi::crypto_box_curve25519xsalsa20poly1305_NONCEBYTES as usize;
+pub const NONCEBYTES: usize = 24;
 
 /// Number of bytes in a `PrecomputedKey`.
-pub const PRECOMPUTEDKEYBYTES: usize =
-    ffi::crypto_box_curve25519xsalsa20poly1305_BEFORENMBYTES as usize;
+pub const PRECOMPUTEDKEYBYTES: usize = 32;
 
 /// Number of bytes in the authenticator tag of an encrypted message
 /// i.e. the number of bytes by which the ciphertext is larger than the
 /// plaintext.
-pub const MACBYTES: usize = ffi::crypto_box_curve25519xsalsa20poly1305_MACBYTES as usize;
+pub const MACBYTES: usize = 16;
 
 new_type! {
     /// `Seed` that can be used for keypair generation
@@ -60,11 +65,9 @@ new_type! {
 impl SecretKey {
     /// `public_key()` computes the corresponding public key for a given secret key
     pub fn public_key(&self) -> PublicKey {
-        unsafe {
-            let mut pk = PublicKey([0u8; PUBLICKEYBYTES]);
-            ffi::crypto_scalarmult_base(pk.0.as_mut_ptr(), self.0.as_ptr());
-            pk
-        }
+        let sk = crypto_box::SecretKey::from(self.0);
+        let pk = sk.public_key();
+        PublicKey(*pk.as_bytes())
     }
 }
 
@@ -86,12 +89,9 @@ new_type! {
 /// called `sodiumoxide::init()` once before using any other function
 /// from sodiumoxide.
 pub fn gen_keypair() -> (PublicKey, SecretKey) {
-    unsafe {
-        let mut pk = PublicKey([0u8; PUBLICKEYBYTES]);
-        let mut sk = SecretKey([0u8; SECRETKEYBYTES]);
-        ffi::crypto_box_curve25519xsalsa20poly1305_keypair(pk.0.as_mut_ptr(), sk.0.as_mut_ptr());
-        (pk, sk)
-    }
+    let sk = crypto_box::SecretKey::generate(&mut thread_rng());
+    let pk = sk.public_key();
+    (PublicKey(*pk.as_bytes()), SecretKey(*sk.as_bytes()))
 }
 
 /// `key_pair_from_seed()` deterministically derives a key pair from a single key seed (crypto_box_SEEDBYTES bytes).
@@ -100,16 +100,12 @@ pub fn gen_keypair() -> (PublicKey, SecretKey) {
 /// called `sodiumoxide::init()` once before using any other function
 /// from sodiumoxide.
 pub fn keypair_from_seed(seed: &Seed) -> (PublicKey, SecretKey) {
-    unsafe {
-        let mut pk = PublicKey([0u8; PUBLICKEYBYTES]);
-        let mut sk = SecretKey([0u8; SECRETKEYBYTES]);
-        ffi::crypto_box_curve25519xsalsa20poly1305_seed_keypair(
-            pk.0.as_mut_ptr(),
-            sk.0.as_mut_ptr(),
-            seed.0.as_ptr(),
-        );
-        (pk, sk)
-    }
+    let mut hasher = Sha512::new();
+    hasher.update(seed.0);
+    let key: [u8; 32] = hasher.finalize().as_slice()[..32].try_into().unwrap();
+    let sk = crypto_box::SecretKey::from(key);
+    let pk = sk.public_key();
+    (PublicKey(*pk.as_bytes()), SecretKey(*sk.as_bytes()))
 }
 
 /// `gen_nonce()` randomly generates a nonce
@@ -124,20 +120,11 @@ pub fn gen_nonce() -> Nonce {
 /// `seal()` encrypts and authenticates a message `m` using the senders secret key `sk`,
 /// the receivers public key `pk` and a nonce `n`. It returns a ciphertext `c`.
 pub fn seal(m: &[u8], n: &Nonce, pk: &PublicKey, sk: &SecretKey) -> Vec<u8> {
-    let clen = m.len() + MACBYTES;
-    let mut c = Vec::with_capacity(clen);
-    unsafe {
-        c.set_len(clen);
-        ffi::crypto_box_easy(
-            c.as_mut_ptr(),
-            m.as_ptr(),
-            m.len() as u64,
-            n.0.as_ptr(),
-            pk.0.as_ptr(),
-            sk.0.as_ptr(),
-        );
-    }
-    c
+    let ep_sk = crypto_box::SecretKey::from(sk.0);
+    let salsabox = SalsaBox::new(&crypto_box::PublicKey::from(pk.0), &ep_sk);
+    salsabox
+        .encrypt(crypto_box::Nonce::from_slice(&n.0), m)
+        .unwrap()
 }
 
 /// `seal_detached()` encrypts and authenticates a message `m` using the senders secret key `sk`,
@@ -145,46 +132,23 @@ pub fn seal(m: &[u8], n: &Nonce, pk: &PublicKey, sk: &SecretKey) -> Vec<u8> {
 /// function returns it will contain the ciphertext. The detached authentication tag is returned by
 /// value.
 pub fn seal_detached(m: &mut [u8], n: &Nonce, pk: &PublicKey, sk: &SecretKey) -> Tag {
-    let mut tag = [0; MACBYTES];
-    unsafe {
-        ffi::crypto_box_detached(
-            m.as_mut_ptr(),
-            tag.as_mut_ptr(),
-            m.as_ptr(),
-            m.len() as u64,
-            n.0.as_ptr(),
-            pk.0.as_ptr(),
-            sk.0.as_ptr(),
-        );
-    };
-    Tag(tag)
+    let ep_sk = crypto_box::SecretKey::from(sk.0);
+    let salsabox = SalsaBox::new(&crypto_box::PublicKey::from(pk.0), &ep_sk);
+    let nonce = crypto_box::Nonce::from_slice(&n.0);
+    let tag = salsabox.encrypt_in_place_detached(nonce, &[], m).unwrap();
+    Tag(tag.try_into().unwrap())
 }
 
 /// `open()` verifies and decrypts a ciphertext `c` using the receiver's secret key `sk`,
 /// the senders public key `pk`, and a nonce `n`. It returns a plaintext `Ok(m)`.
 /// If the ciphertext fails verification, `open()` returns `Err(())`.
 pub fn open(c: &[u8], n: &Nonce, pk: &PublicKey, sk: &SecretKey) -> Result<Vec<u8>, ()> {
-    if c.len() < MACBYTES {
-        return Err(());
-    }
-    let mlen = c.len() - MACBYTES;
-    let mut m = Vec::with_capacity(mlen);
-    let ret = unsafe {
-        m.set_len(mlen);
-        ffi::crypto_box_open_easy(
-            m.as_mut_ptr(),
-            c.as_ptr(),
-            c.len() as u64,
-            n.0.as_ptr(),
-            pk.0.as_ptr(),
-            sk.0.as_ptr(),
-        )
-    };
-    if ret == 0 {
-        Ok(m)
-    } else {
-        Err(())
-    }
+    let sk = crypto_box::SecretKey::from(sk.0);
+    let pk = crypto_box::PublicKey::from(pk.0);
+    let salsabox = SalsaBox::new(&pk, &sk);
+    salsabox
+        .decrypt(crypto_box::Nonce::from_slice(&n.0), c)
+        .map_err(|_| ())
 }
 
 /// `open_detached()` verifies and decrypts a ciphertext `c` using the receiver's secret key `sk`,
@@ -198,22 +162,14 @@ pub fn open_detached(
     pk: &PublicKey,
     sk: &SecretKey,
 ) -> Result<(), ()> {
-    let ret = unsafe {
-        ffi::crypto_box_open_detached(
-            c.as_mut_ptr(),
-            c.as_ptr(),
-            mac.0.as_ptr(),
-            c.len() as u64,
-            n.0.as_ptr(),
-            pk.0.as_ptr(),
-            sk.0.as_ptr(),
-        )
-    };
-    if ret == 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
+    let sk = crypto_box::SecretKey::from(sk.0);
+    let pk = crypto_box::PublicKey::from(pk.0);
+    let salsabox = SalsaBox::new(&pk, &sk);
+    let nonce = crypto_box::Nonce::from_slice(&n.0);
+    let tag = crypto_box::Tag::from_slice(&mac.0);
+    salsabox
+        .decrypt_in_place_detached(nonce, &[], c, tag)
+        .map_err(|_| ())
 }
 
 new_type! {
@@ -229,77 +185,42 @@ new_type! {
 /// `precompute()` computes an intermediate key that can be used by `seal_precomputed()`
 /// and `open_precomputed()`
 pub fn precompute(pk: &PublicKey, sk: &SecretKey) -> PrecomputedKey {
-    let mut k = PrecomputedKey([0u8; PRECOMPUTEDKEYBYTES]);
-    unsafe {
-        ffi::crypto_box_curve25519xsalsa20poly1305_beforenm(
-            k.0.as_mut_ptr(),
-            pk.0.as_ptr(),
-            sk.0.as_ptr(),
-        );
-    }
-    k
+    let shared_secret = Zeroizing::new(x25519(sk.0, pk.0));
+    let key = hsalsa::<typenum::U10>(
+        salsa20::Key::from_slice(&*shared_secret),
+        &GenericArray::default(),
+    );
+    PrecomputedKey(key.as_slice().try_into().unwrap())
 }
 
 /// `seal_precomputed()` encrypts and authenticates a message `m` using a precomputed key `k`,
 /// and a nonce `n`. It returns a ciphertext `c`.
 pub fn seal_precomputed(m: &[u8], n: &Nonce, k: &PrecomputedKey) -> Vec<u8> {
-    let clen = m.len() + MACBYTES;
-    let mut c = Vec::with_capacity(clen);
-    unsafe {
-        ffi::crypto_box_easy_afternm(
-            c.as_mut_ptr(),
-            m.as_ptr(),
-            m.len() as u64,
-            n.0.as_ptr(),
-            k.0.as_ptr(),
-        );
-        c.set_len(clen);
-    }
-    c
+    let nonce = crypto_box::Nonce::from_slice(&n.0);
+    XSalsa20Poly1305::new(xsalsa20poly1305::Key::from_slice(&k.0))
+        .encrypt(nonce, m)
+        .unwrap()
 }
 
 /// `seal_detached_precomputed()` encrypts and authenticates a message `m` using a precomputed key
 /// `k` and a nonce `n`. `m` is encrypted in place, so after this function returns it will contain
 /// the ciphertext. The detached authentication tag is returned by value.
 pub fn seal_detached_precomputed(m: &mut [u8], n: &Nonce, k: &PrecomputedKey) -> Tag {
-    let mut tag = [0; MACBYTES];
-    unsafe {
-        ffi::crypto_box_detached_afternm(
-            m.as_mut_ptr(),
-            tag.as_mut_ptr(),
-            m.as_ptr(),
-            m.len() as u64,
-            n.0.as_ptr(),
-            k.0.as_ptr(),
-        );
-    };
-    Tag(tag)
+    let nonce = crypto_box::Nonce::from_slice(&n.0);
+    let tag = XSalsa20Poly1305::new(xsalsa20poly1305::Key::from_slice(&k.0))
+        .encrypt_in_place_detached(nonce, &[], m)
+        .unwrap();
+    Tag(tag.try_into().unwrap())
 }
 
 /// `open_precomputed()` verifies and decrypts a ciphertext `c` using a precomputed
 /// key `k` and a nonce `n`. It returns a plaintext `Ok(m)`.
 /// If the ciphertext fails verification, `open_precomputed()` returns `Err(())`.
 pub fn open_precomputed(c: &[u8], n: &Nonce, k: &PrecomputedKey) -> Result<Vec<u8>, ()> {
-    if c.len() < MACBYTES {
-        return Err(());
-    }
-    let mlen = c.len() - MACBYTES;
-    let mut m = Vec::with_capacity(mlen);
-    unsafe {
-        let ret = ffi::crypto_box_open_easy_afternm(
-            m.as_mut_ptr(),
-            c.as_ptr(),
-            c.len() as u64,
-            n.0.as_ptr(),
-            k.0.as_ptr(),
-        );
-        if ret == 0 {
-            m.set_len(mlen);
-            Ok(m)
-        } else {
-            Err(())
-        }
-    }
+    let nonce = crypto_box::Nonce::from_slice(&n.0);
+    XSalsa20Poly1305::new(xsalsa20poly1305::Key::from_slice(&k.0))
+        .decrypt(nonce, c)
+        .map_err(|_| ())
 }
 
 /// `open_detached_precomputed()` verifies and decrypts a ciphertext `c` using a precomputed key
@@ -312,30 +233,21 @@ pub fn open_detached_precomputed(
     n: &Nonce,
     k: &PrecomputedKey,
 ) -> Result<(), ()> {
-    let ret = unsafe {
-        ffi::crypto_box_open_detached_afternm(
-            c.as_mut_ptr(),
-            c.as_ptr(),
-            mac.0.as_ptr(),
-            c.len() as u64,
-            n.0.as_ptr(),
-            k.0.as_ptr(),
-        )
-    };
-    if ret == 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
+    let nonce = crypto_box::Nonce::from_slice(&n.0);
+    let tag = crypto_box::Tag::from_slice(&mac.0);
+    XSalsa20Poly1305::new(xsalsa20poly1305::Key::from_slice(&k.0))
+        .decrypt_in_place_detached(nonce, &[], c, tag)
+        .map_err(|_| ())
 }
 
 #[cfg(test)]
 mod test {
+    use crate::randombytes::{randombytes, randombytes_into};
+
     use super::*;
 
     #[test]
     fn test_seal_open() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let (pk1, sk1) = gen_keypair();
             let (pk2, sk2) = gen_keypair();
@@ -349,7 +261,6 @@ mod test {
 
     #[test]
     fn test_seal_open_precomputed() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let (pk1, sk1) = gen_keypair();
             let (pk2, sk2) = gen_keypair();
@@ -368,7 +279,6 @@ mod test {
 
     #[test]
     fn test_seal_open_tamper() {
-        use randombytes::randombytes;
         for i in 0..32usize {
             let (pk1, sk1) = gen_keypair();
             let (pk2, sk2) = gen_keypair();
@@ -385,7 +295,6 @@ mod test {
 
     #[test]
     fn test_seal_open_precomputed_tamper() {
-        use randombytes::randombytes;
         for i in 0..32usize {
             let (pk1, sk1) = gen_keypair();
             let (pk2, sk2) = gen_keypair();
@@ -404,7 +313,6 @@ mod test {
 
     #[test]
     fn test_seal_open_seed() {
-        use randombytes::{randombytes, randombytes_into};
         for i in 0..256usize {
             let mut seedbuf = [0; 32];
             randombytes_into(&mut seedbuf);
@@ -421,7 +329,6 @@ mod test {
 
     #[test]
     fn test_seal_open_seed_tamper() {
-        use randombytes::{randombytes, randombytes_into};
         for i in 0..32usize {
             let mut seedbuf = [0; 32];
             randombytes_into(&mut seedbuf);
@@ -441,7 +348,6 @@ mod test {
 
     #[test]
     fn test_seal_open_detached() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let (pk1, sk1) = gen_keypair();
             let (pk2, sk2) = gen_keypair();
@@ -456,7 +362,6 @@ mod test {
 
     #[test]
     fn test_seal_combined_then_open_detached() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let (pk1, sk1) = gen_keypair();
             let (pk2, sk2) = gen_keypair();
@@ -472,7 +377,6 @@ mod test {
 
     #[test]
     fn test_seal_detached_then_open_combined() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let (pk1, sk1) = gen_keypair();
             let (pk2, sk2) = gen_keypair();
@@ -489,7 +393,6 @@ mod test {
 
     #[test]
     fn test_seal_open_detached_tamper() {
-        use randombytes::randombytes;
         for i in 0..32usize {
             let (pk1, sk1) = gen_keypair();
             let (pk2, sk2) = gen_keypair();
@@ -532,7 +435,6 @@ mod test {
 
     #[test]
     fn test_seal_open_detached_precomputed() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let (pk1, sk1) = gen_keypair();
             let (pk2, sk2) = gen_keypair();
@@ -549,7 +451,6 @@ mod test {
 
     #[test]
     fn test_seal_combined_then_open_detached_precomputed() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let (pk1, sk1) = gen_keypair();
             let (pk2, sk2) = gen_keypair();
@@ -567,7 +468,6 @@ mod test {
 
     #[test]
     fn test_seal_detached_precomputed_then_open_combined() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let (pk1, sk1) = gen_keypair();
             let (pk2, sk2) = gen_keypair();
@@ -586,7 +486,6 @@ mod test {
 
     #[test]
     fn test_seal_open_detached_precomputed_tamper() {
-        use randombytes::randombytes;
         for i in 0..32usize {
             let (pk1, sk1) = gen_keypair();
             let (pk2, sk2) = gen_keypair();
@@ -741,7 +640,7 @@ mod test {
     #[cfg(feature = "serde")]
     #[test]
     fn test_serialisation() {
-        use test_utils::round_trip;
+        use crate::test_utils::round_trip;
         for _ in 0..256usize {
             let (pk, sk) = gen_keypair();
             let n = gen_nonce();
@@ -762,7 +661,7 @@ mod test {
 mod bench {
     extern crate test;
     use super::*;
-    use randombytes::randombytes;
+    use crate::randombytes::randombytes;
 
     const BENCH_SIZES: [usize; 14] = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 

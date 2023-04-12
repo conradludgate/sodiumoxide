@@ -172,7 +172,7 @@ macro_rules! public_newtype_traits (($newtype:ident) => (
 /// Usage:
 /// Generating secret datatypes, e.g. keys
 ///
-/// ```
+/// ```ignore
 /// new_type! {
 ///     /// This is some documentation for our type
 ///     secret Key(KEYBYTES);
@@ -181,7 +181,7 @@ macro_rules! public_newtype_traits (($newtype:ident) => (
 ///
 /// Generating public datatypes, e.g. public keys
 ///
-/// ```
+/// ```ignore
 /// new_type! {
 ///     /// This is some documentation for our type
 ///     public PublicKey(PUBLICKEYBYTES);
@@ -191,7 +191,7 @@ macro_rules! public_newtype_traits (($newtype:ident) => (
 ///
 /// Generating nonce types
 ///
-/// ```
+/// ```ignore
 /// new_type! {
 ///     /// This is some documentation for our type
 ///     nonce Nonce(NONCEBYTES);

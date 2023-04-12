@@ -1,9 +1,11 @@
 //! Cryptographic random number generation.
 
+use chacha20::cipher::{KeyIvInit, StreamCipher};
+use chacha20::{ChaCha20, Key, Nonce};
+
 #[cfg(not(feature = "std"))]
 use prelude::*;
-use rand::{distributions::Uniform, prelude::Distribution, thread_rng, RngCore, SeedableRng, Rng};
-use rand_chacha::ChaCha20Rng;
+use rand::{distributions::Uniform, prelude::Distribution, thread_rng, RngCore};
 
 /// The number of seed bytes to use for the deterministic RNG functions
 /// [`randombytes_buf_deterministic()`] and
@@ -40,7 +42,9 @@ pub fn randombytes_into(buf: &mut [u8]) {
 /// called `sodiumoxide::init()` once before using any other function
 /// from sodiumoxide.
 pub fn randombytes_uniform(upper_bound: u32) -> u32 {
-    if upper_bound == 0 { return 0; }
+    if upper_bound == 0 {
+        return 0;
+    }
     Uniform::from(0..upper_bound).sample(&mut thread_rng())
 }
 
@@ -68,7 +72,7 @@ new_type! {
 /// the hood, it uses the ChaCha20 stream cipher. Up to 256 GB can be produced with a single seed.
 pub fn randombytes_buf_deterministic(size: usize, seed: &Seed) -> Vec<u8> {
     let mut buf = vec![0u8; size];
-    ChaCha20Rng::from_seed(seed.0).fill(buf.as_mut_slice());
+    randombytes_buf_deterministic_into(buf.as_mut_slice(), seed);
     buf
 }
 
@@ -78,7 +82,9 @@ pub fn randombytes_buf_deterministic(size: usize, seed: &Seed) -> Vec<u8> {
 /// A counterpart to [`randombytes_buf_deterministic()`] that
 /// fills `buf` with `buf.len()` bytes instead of returning a value.
 pub fn randombytes_buf_deterministic_into(buf: &mut [u8], seed: &Seed) {
-    ChaCha20Rng::from_seed(seed.0).fill(buf);
+    const NONCE: [u8; 12] = *b"LibsodiumDRG";
+    let mut chacha20 = ChaCha20::new(&Key::from(seed.0), &Nonce::from(NONCE));
+    chacha20.apply_keystream(buf);
 }
 
 #[cfg(test)]
