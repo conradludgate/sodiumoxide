@@ -1,6 +1,6 @@
 //! Libsodium Base64 encoding/decoding helper functions
 
-use base64::Engine;
+use base64ct::Encoding;
 #[cfg(not(feature = "std"))]
 use prelude::*;
 
@@ -19,13 +19,12 @@ pub enum Variant {
 
 /// Encodes a byte sequence as a Base64 string using the given variant.
 pub fn encode<T: AsRef<[u8]>>(bin: T, variant: Variant) -> String {
-    let engine = match variant {
-        Variant::Original => base64::engine::general_purpose::STANDARD,
-        Variant::OriginalNoPadding => base64::engine::general_purpose::STANDARD_NO_PAD,
-        Variant::UrlSafe => base64::engine::general_purpose::URL_SAFE,
-        Variant::UrlSafeNoPadding => base64::engine::general_purpose::URL_SAFE_NO_PAD,
-    };
-    engine.encode(bin)
+    match variant {
+        Variant::Original => base64ct::Base64::encode_string(bin.as_ref()),
+        Variant::OriginalNoPadding => base64ct::Base64Unpadded::encode_string(bin.as_ref()),
+        Variant::UrlSafe => base64ct::Base64Url::encode_string(bin.as_ref()),
+        Variant::UrlSafeNoPadding => base64ct::Base64UrlUnpadded::encode_string(bin.as_ref()),
+    }
 }
 
 /// Decodes a Base64 string into a byte sequence using the given variant.
@@ -33,13 +32,24 @@ pub fn encode<T: AsRef<[u8]>>(bin: T, variant: Variant) -> String {
 /// Fails if the decoded length overflows
 /// or if `b64` contains invalid characters.
 pub fn decode<T: AsRef<[u8]>>(b64: T, variant: Variant) -> Result<Vec<u8>, ()> {
-    let engine = match variant {
-        Variant::Original => base64::engine::general_purpose::STANDARD,
-        Variant::OriginalNoPadding => base64::engine::general_purpose::STANDARD_NO_PAD,
-        Variant::UrlSafe => base64::engine::general_purpose::URL_SAFE,
-        Variant::UrlSafeNoPadding => base64::engine::general_purpose::URL_SAFE_NO_PAD,
-    };
-    engine.decode(b64).map_err(|_| ())
+    let mut vec = vec![0; decoded_len(b64.as_ref().len())];
+    let d = match variant {
+        Variant::Original => base64ct::Base64::decode(b64.as_ref(), &mut vec),
+        Variant::OriginalNoPadding => base64ct::Base64Unpadded::decode(b64.as_ref(), &mut vec),
+        Variant::UrlSafe => base64ct::Base64Url::decode(b64.as_ref(), &mut vec),
+        Variant::UrlSafeNoPadding => base64ct::Base64UrlUnpadded::decode(b64.as_ref(), &mut vec),
+    }
+    .map_err(|_| ())?
+    .len();
+    vec.truncate(d);
+    Ok(vec)
+}
+
+fn decoded_len(input_len: usize) -> usize {
+    // overflow-proof computation of `(3*n)/4`
+    let k = input_len / 4;
+    let l = input_len - 4 * k;
+    3 * k + (3 * l) / 4
 }
 
 #[cfg(test)]
