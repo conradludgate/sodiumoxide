@@ -5,17 +5,19 @@
 //! This function is conjectured to meet the standard notions of privacy and
 //! authenticity.
 
-use crypto::nonce::gen_random_nonce;
-use ffi;
+use crate::crypto::nonce::gen_random_nonce;
+use crate::randombytes::randombytes_into;
 #[cfg(not(feature = "std"))]
 use prelude::*;
-use randombytes::randombytes_into;
-
+use xsalsa20poly1305::{
+    aead::{Aead, AeadInPlace},
+    KeyInit, XSalsa20Poly1305,
+};
 /// Number of bytes in `Key`.
-pub const KEYBYTES: usize = ffi::crypto_secretbox_xsalsa20poly1305_KEYBYTES as usize;
+pub const KEYBYTES: usize = xsalsa20poly1305::KEY_SIZE;
 
 /// Number of bytes in a `Nonce`.
-pub const NONCEBYTES: usize = ffi::crypto_secretbox_xsalsa20poly1305_NONCEBYTES as usize;
+pub const NONCEBYTES: usize = xsalsa20poly1305::NONCE_SIZE;
 
 new_type! {
     /// `Key` for symmetric authenticated encryption
@@ -40,7 +42,7 @@ new_type! {
 /// Number of bytes in the authenticator tag of an encrypted message
 /// i.e. the number of bytes by which the ciphertext is larger than the
 /// plaintext.
-pub const MACBYTES: usize = ffi::crypto_secretbox_xsalsa20poly1305_MACBYTES as usize;
+pub const MACBYTES: usize = xsalsa20poly1305::TAG_SIZE;
 
 /// `gen_key()` randomly generates a secret key
 ///
@@ -65,63 +67,33 @@ pub fn gen_nonce() -> Nonce {
 /// `seal()` encrypts and authenticates a message `m` using a secret key `k` and a
 /// nonce `n`.  It returns a ciphertext `c`.
 pub fn seal(m: &[u8], n: &Nonce, k: &Key) -> Vec<u8> {
-    let clen = m.len() + MACBYTES;
-    let mut c = Vec::with_capacity(clen);
-    unsafe {
-        ffi::crypto_secretbox_easy(
-            c.as_mut_ptr(),
-            m.as_ptr(),
-            m.len() as u64,
-            n.0.as_ptr(),
-            k.0.as_ptr(),
-        );
-        c.set_len(clen);
-    }
-    c
+    XSalsa20Poly1305::new_from_slice(&k.0)
+        .unwrap()
+        .encrypt(xsalsa20poly1305::Nonce::from_slice(&n.0), m)
+        .unwrap()
 }
 
 /// `seal_detached()` encrypts and authenticates a message `m` using a secret key `k` and a nonce
 /// `n`.  `m` is encrypted in place, so after this function returns it will contain the ciphertext.
 /// The detached authentication tag is returned by value.
 pub fn seal_detached(m: &mut [u8], n: &Nonce, k: &Key) -> Tag {
-    let mut tag = [0; MACBYTES];
-    unsafe {
-        ffi::crypto_secretbox_detached(
-            m.as_mut_ptr(),
-            tag.as_mut_ptr(),
-            m.as_ptr(),
-            m.len() as u64,
-            n.0.as_ptr(),
-            k.0.as_ptr(),
-        );
-    };
-    Tag(tag)
+    Tag(XSalsa20Poly1305::new_from_slice(&k.0)
+        .unwrap()
+        .encrypt_in_place_detached(xsalsa20poly1305::Nonce::from_slice(&n.0), &[], m)
+        .unwrap()
+        .as_slice()
+        .try_into()
+        .unwrap())
 }
 
 /// `open()` verifies and decrypts a ciphertext `c` using a secret key `k` and a nonce `n`.
 /// It returns a plaintext `Ok(m)`.
 /// If the ciphertext fails verification, `open()` returns `Err(())`.
 pub fn open(c: &[u8], n: &Nonce, k: &Key) -> Result<Vec<u8>, ()> {
-    if c.len() < MACBYTES {
-        return Err(());
-    }
-    let mlen = c.len() - MACBYTES;
-    let mut m = Vec::with_capacity(mlen);
-    unsafe {
-        let ret = ffi::crypto_secretbox_open_easy(
-            m.as_mut_ptr(),
-            c.as_ptr(),
-            c.len() as u64,
-            n.0.as_ptr(),
-            k.0.as_ptr(),
-        );
-        if ret == 0 {
-            m.set_len(mlen);
-            Ok(m)
-        } else {
-            Err(())
-        }
-    }
+    XSalsa20Poly1305::new_from_slice(&k.0)
+        .unwrap()
+        .decrypt(xsalsa20poly1305::Nonce::from_slice(&n.0), c)
+        .map_err(|_| ())
 }
 
 /// `open_detached()` verifies and decrypts a ciphertext `c` and and authentication tag `tag`,
@@ -129,30 +101,25 @@ pub fn open(c: &[u8], n: &Nonce, k: &Key) -> Result<Vec<u8>, ()> {
 /// successful it will contain the plaintext. If the ciphertext fails verification,
 /// `open_detached()` returns `Err(())`, and the ciphertext is not modified.
 pub fn open_detached(c: &mut [u8], tag: &Tag, n: &Nonce, k: &Key) -> Result<(), ()> {
-    let ret = unsafe {
-        ffi::crypto_secretbox_open_detached(
-            c.as_mut_ptr(),
-            c.as_ptr(),
-            tag.0.as_ptr(),
-            c.len() as u64,
-            n.0.as_ptr(),
-            k.0.as_ptr(),
+    XSalsa20Poly1305::new_from_slice(&k.0)
+        .unwrap()
+        .decrypt_in_place_detached(
+            xsalsa20poly1305::Nonce::from_slice(&n.0),
+            &[],
+            c,
+            xsalsa20poly1305::Tag::from_slice(&tag.0),
         )
-    };
-    if ret == 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
+        .map_err(|_| ())
 }
 
 #[cfg(test)]
 mod test {
+    use crate::randombytes::randombytes;
+
     use super::*;
 
     #[test]
     fn test_seal_open() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let k = gen_key();
             let m = randombytes(i);
@@ -165,7 +132,6 @@ mod test {
 
     #[test]
     fn test_seal_open_tamper() {
-        use randombytes::randombytes;
         for i in 0..32usize {
             let k = gen_key();
             let m = randombytes(i);
@@ -185,7 +151,6 @@ mod test {
 
     #[test]
     fn test_seal_open_detached() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let k = gen_key();
             let m = randombytes(i);
@@ -199,7 +164,6 @@ mod test {
 
     #[test]
     fn test_seal_combined_then_open_detached() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let k = gen_key();
             let m = randombytes(i);
@@ -214,7 +178,6 @@ mod test {
 
     #[test]
     fn test_seal_detached_then_open_combined() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let k = gen_key();
             let m = randombytes(i);
@@ -230,7 +193,6 @@ mod test {
 
     #[test]
     fn test_seal_open_detached_tamper() {
-        use randombytes::randombytes;
         for i in 0..32usize {
             let k = gen_key();
             let mut m = randombytes(i);
@@ -315,7 +277,7 @@ mod test {
     #[cfg(feature = "serde")]
     #[test]
     fn test_serialisation() {
-        use test_utils::round_trip;
+        use crate::test_utils::round_trip;
         for _ in 0..256usize {
             let k = gen_key();
             let n = gen_nonce();
@@ -335,7 +297,7 @@ mod test {
 mod bench {
     extern crate test;
     use super::*;
-    use randombytes::randombytes;
+    use crate::randombytes::randombytes;
 
     const BENCH_SIZES: [usize; 14] = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 

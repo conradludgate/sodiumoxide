@@ -2,6 +2,8 @@
 //! unlimited number of messages with the same key, without any practical limit
 //! to the size of a message (up to ~ 2^64 bytes).
 
+// this module sucks - https://datatracker.ietf.org/doc/html/draft-agl-tls-chacha20poly1305-04
+
 use chacha20poly1305::{
     aead::{Aead, AeadCore, AeadInPlace, KeyInit, Payload},
     ChaCha20Poly1305,

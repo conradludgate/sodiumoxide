@@ -113,7 +113,7 @@ pub mod crypto {
     // pub mod pwhash;
     // pub mod scalarmult;
     // pub mod sealedbox;
-    // pub mod secretbox;
+    pub mod secretbox;
     // pub mod secretstream;
     // pub mod shorthash;
     // pub mod sign;
