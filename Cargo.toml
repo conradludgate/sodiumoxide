@@ -13,9 +13,6 @@ exclude = [
 ]
 edition = "2021"
 
-# [workspace]
-# members = ["libsodium-sys", "testcrate"]
-
 [dependencies]
 ed25519 = { version = "2", default-features = false }
 ed25519_1 = { package="ed25519", version = "1", default-features = false }

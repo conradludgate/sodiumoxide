@@ -78,8 +78,6 @@ jobs:
   nostd:
     name: no_std
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
     steps:
     - uses: actions/checkout@v2
       with:
@@ -122,22 +120,3 @@ jobs:
         use-cross: true
         command: build
         args: --target ${{ matrix.arch }}
-
-  # These jobs doesn't actually test anything, but they're only used to tell
-  # bors the build completed, as there is no practical way to detect when a
-  # workflow is successful listening to webhooks only.
-  #
-  # ALL THE PREVIOUS JOBS NEEDS TO BE ADDED TO THE `needs` SECTION OF THIS JOB!
-
-  end-success:
-    name: bors build finished
-    if: success()
-    runs-on: ubuntu-latest
-    needs:
-    - test
-    - fmt
-    - clippy
-    - cross
-    steps:
-    - name: Mark the job as successful
-      run: exit 0

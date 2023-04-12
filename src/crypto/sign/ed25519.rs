@@ -60,7 +60,7 @@ impl Signer<Signature> for SecretKey {
 }
 impl ed25519_1::signature::Signer<ed25519_1::Signature> for SecretKey {
     fn try_sign(&self, msg: &[u8]) -> Result<ed25519_1::Signature, ed25519_1::Error> {
-        todo!()
+        ed25519_1::Signature::from_bytes(&SigningKey::from_bytes(&self.0).sign(msg).to_bytes())
     }
 }
 
@@ -249,11 +249,10 @@ pub fn verify_detached(sig: &ed25519_1::Signature, m: &[u8], pk: &PublicKey) -> 
 
 #[cfg(test)]
 mod test {
-    use crate::randombytes::{randombytes, randombytes_into};
+    use crate::randombytes::randombytes;
 
     use super::*;
     use ed25519_1::Signature;
-    use hex;
 
     #[test]
     fn test_sk_to_pk() {
@@ -302,9 +301,13 @@ mod test {
             let (pk, sk) = gen_keypair();
             let m = randombytes(i);
             let mut sig = sign_detached(&m, &sk).to_bytes();
-            for j in 0..SIGNATUREBYTES-1 {
+            for j in 0..SIGNATUREBYTES - 1 {
                 sig[j] ^= 0x20;
-                assert!(!verify_detached(&Signature::new(sig), &m, &pk));
+                assert!(!verify_detached(
+                    &Signature::from_bytes(&sig).unwrap(),
+                    &m,
+                    &pk
+                ));
                 sig[j] ^= 0x20;
             }
         }
