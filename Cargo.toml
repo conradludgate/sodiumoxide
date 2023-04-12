@@ -17,7 +17,8 @@ edition = "2021"
 # members = ["libsodium-sys", "testcrate"]
 
 [dependencies]
-# ed25519 = { version = "1", default-features = false }
+ed25519 = { version = "2", default-features = false }
+ed25519_1 = { package="ed25519", version = "1", default-features = false }
 serde = { version = "^1.0.59", default-features = false, optional = true }
 subtle = "2"
 zeroize = "1"
@@ -37,6 +38,7 @@ typenum = "1.16.0"
 generic-array = "0.14.7"
 blake2 = "0.10.6"
 hmac = "0.12.1"
+ed25519-dalek = { version = "2.0.0-rc.2", features = ["rand_core"] }
 
 [dev-dependencies]
 serde = "^1.0.59"

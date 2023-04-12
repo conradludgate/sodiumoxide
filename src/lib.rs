@@ -116,7 +116,7 @@ pub mod crypto {
     pub mod secretbox;
     // pub mod secretstream;
     // pub mod shorthash;
-    // pub mod sign;
+    pub mod sign;
     // pub mod stream;
     // pub mod verify;
 }
