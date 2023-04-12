@@ -1,16 +1,27 @@
 //! A particular combination of `Curve25519`, `Blake2B`, `XSalsa20` and `Poly1305`.
 
-use ffi;
+use aes_gcm::{aead::Aead, AeadInPlace};
+use crypto_box::SalsaBox;
 #[cfg(not(feature = "std"))]
 use prelude::*;
-
-use libc::c_ulonglong;
+use rand::thread_rng;
 
 use super::super::box_::curve25519xsalsa20poly1305 as box_;
 
 /// Number of additional bytes in a ciphertext compared to the corresponding
 /// plaintext.
-pub const SEALBYTES: usize = ffi::crypto_box_SEALBYTES as usize;
+pub const SEALBYTES: usize = crypto_box::KEY_SIZE + 16;
+
+fn get_seal_nonce(
+    ephemeral_pk: &crypto_box::PublicKey,
+    recipient_pk: &crypto_box::PublicKey,
+) -> crypto_box::Nonce {
+    use blake2::{Blake2b, Digest};
+    let mut hasher = Blake2b::<typenum::U24>::new();
+    hasher.update(ephemeral_pk.as_bytes());
+    hasher.update(recipient_pk.as_bytes());
+    hasher.finalize()
+}
 
 /// The `seal()` function encrypts a message `m` for a recipient whose public key
 /// is `pk`. It returns the ciphertext whose length is `SEALBYTES + m.len()`.
@@ -19,16 +30,23 @@ pub const SEALBYTES: usize = ffi::crypto_box_SEALBYTES as usize;
 /// key to the ciphertext. The secret key is overwritten and is not accessible
 /// after this function returns.
 pub fn seal(m: &[u8], pk: &box_::PublicKey) -> Vec<u8> {
-    let mut c = vec![0u8; m.len() + SEALBYTES];
-    unsafe {
-        ffi::crypto_box_seal(
-            c.as_mut_ptr(),
-            m.as_ptr(),
-            m.len() as c_ulonglong,
-            pk.0.as_ptr(),
-        );
-    }
-    c
+    let tx_sk = crypto_box::SecretKey::generate(&mut thread_rng());
+    let rx_pk = crypto_box::PublicKey::from(pk.0);
+    let tx_pk = tx_sk.public_key();
+
+    let mut buf = Vec::with_capacity(crypto_box::KEY_SIZE + m.len() + 16);
+    buf.extend_from_slice(tx_pk.as_bytes());
+    buf.extend_from_slice(&[0; 16]);
+    buf.extend_from_slice(m);
+
+    let nonce = get_seal_nonce(&tx_pk, &rx_pk);
+    let salsabox = SalsaBox::new(&rx_pk, &tx_sk);
+
+    let tag = salsabox
+        .encrypt_in_place_detached(&nonce, &[], &mut buf[crypto_box::KEY_SIZE + 16..])
+        .unwrap();
+    buf[crypto_box::KEY_SIZE..crypto_box::KEY_SIZE + 16].copy_from_slice(tag.as_slice());
+    buf
 }
 
 /// The `open()` function decrypts the ciphertext `c` using the key pair `(pk, sk)`
@@ -46,43 +64,36 @@ pub fn open(c: &[u8], pk: &box_::PublicKey, sk: &box_::SecretKey) -> Result<Vec<
     if c.len() < SEALBYTES {
         return Err(());
     }
-    let mut m = vec![0u8; c.len() - SEALBYTES];
-    let ret = unsafe {
-        ffi::crypto_box_seal_open(
-            m.as_mut_ptr(),
-            c.as_ptr(),
-            c.len() as c_ulonglong,
-            pk.0.as_ptr(),
-            sk.0.as_ptr(),
-        )
-    };
-    if ret == 0 {
-        Ok(m)
-    } else {
-        Err(())
-    }
+    let rx_sk = crypto_box::SecretKey::from(sk.0);
+    let rx_pk = crypto_box::PublicKey::from(pk.0);
+    let (tx_pk, ciphertext) = c.split_at(crypto_box::KEY_SIZE);
+    let tx_pk: [u8; crypto_box::KEY_SIZE] = tx_pk.try_into().unwrap();
+    let tx_pk = crypto_box::PublicKey::from(tx_pk);
+
+    let nonce = get_seal_nonce(&tx_pk, &rx_pk);
+    let salsabox = SalsaBox::new(&tx_pk, &rx_sk);
+
+    salsabox.decrypt(&nonce, ciphertext).map_err(|_| ())
 }
 
 #[cfg(test)]
 mod test {
-    use super::super::super::box_::curve25519xsalsa20poly1305 as box_;
     use super::*;
+    use crate::randombytes::randombytes;
 
     #[test]
     fn test_seal_open() {
-        use randombytes::randombytes;
         for i in 0..256usize {
             let (pk, sk) = box_::gen_keypair();
             let m = randombytes(i);
             let c = seal(&m, &pk);
-            let opened = open(&c, &pk, &sk);
-            assert!(Ok(m) == opened);
+            let opened = open(&c, &pk, &sk).unwrap();
+            assert_eq!(m, opened);
         }
     }
 
     #[test]
     fn test_seal_open_tamper() {
-        use randombytes::randombytes;
         for i in 0..32usize {
             let (pk, sk) = box_::gen_keypair();
             let m = randombytes(i);
